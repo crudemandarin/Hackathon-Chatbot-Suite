@@ -1,8 +1,5 @@
 # lex_config.yml
-# > generate_lex.py takes this configuration file to generate a Lex Bot model and its associated files
-#
-# Each tag listed is required, except:
-# Under the intents > tree tag, the "name" tag is optional for slot names. If no name is provided the script will generate a unique string.
+# Lex Builder Lambda uses this file to generate a Lex bot and its associated files
 
 config:
     bot_name: Test_Help_Bot

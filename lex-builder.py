@@ -9,7 +9,6 @@ import uuid
 import os
 import re
 from zipfile import ZipFile
-import shutil
 import time
 
 # 3rd Party Libraries
@@ -32,8 +31,9 @@ config = {}
 def generateUniqueName(): return re.sub( '[^a-zA-Z]', '', str( uuid.uuid4() ) )
 
 # Generates response card for a slot
-def generateResponseCard( values ):
-    output = '{\"version\":1,\"contentType\":\"application/vnd.amazonaws.card.generic\",\"genericAttachments\":[{\"title\":\"Options\",\"buttons\":['
+def generateResponseCard( values, title=None ):
+    if title is None: title = 'Options'
+    output = '{\"version\":1,\"contentType\":\"application/vnd.amazonaws.card.generic\",\"genericAttachments\":[{\"title\":\"' + title + '\",\"buttons\":['
     for value in values: output += '{\"text\":\"' + value[ 'value' ].title() + '\",\"value\":\"' + value[ 'value' ] + '\"}' + ( ',' if value != values[ -1 ] else '' )
     output += "]}]}"
     return output
@@ -110,38 +110,54 @@ def parseIntent( entry, digested={ 'slots': [], 'slot_types': [], 'knowledge_bas
                 continue
             
             slot_type_values.append( { 'value': element[ 'option' ] } )
-
-            knowledge_base_child.update( {
-                element[ 'option' ]: {
-                    'next': None,
-                    'return': {
-                        "dialogAction": {
-                            "type": "Close",
-                            "fulfillmentState": "Fulfilled",
-                            "message": {
-                                "contentType": "PlainText",
-                                "content": element[ 'fulfillment' ]
-                            }   
+            
+            if isinstance( element['fulfillment'], str ):
+                knowledge_base_child.update( {
+                    element[ 'option' ]: {
+                        'next': None,
+                        'return': {
+                            "dialogAction": {
+                                "type": "Close",
+                                "fulfillmentState": "Fulfilled",
+                                "message": {
+                                    "contentType": "PlainText",
+                                    "content": element[ 'fulfillment' ]
+                                }   
+                            }
                         }
                     }
-                }
-            } )
+                } )
+            
+            elif isinstance( element['fulfillment'], dict ) and 'action' in element['fulfillment'].keys():
+                knowledge_base_child.update( {
+                    element[ 'option' ]: {
+                        'next': None,
+                        'action': element['fulfillment']['action'],
+                        'return': {
+                            "dialogAction": {
+                                "type": "Close",
+                                "fulfillmentState": "Fulfilled",
+                                "message": {
+                                    "contentType": "PlainText",
+                                    "content": '<REPLACE>'
+                                }   
+                            }
+                        }
+                    }
+                } )
+            
 
     digested[ 'knowledge_base_child' ] = knowledge_base_child
     digested[ 'slot_type_values' ] = slot_type_values
     return digested
 
-def generateLex( origin, trigger ):
+def generateLex( config ):
     s3 = boto3.resource( 's3' )
-
-    # Gets Triggering Configuration File
-    obj = s3.Object( origin[ 'name' ], trigger )
-    config.update( yaml.full_load( obj.get()['Body'].read() )['config'] )
 
     # Gets Lex Template
     obj = s3.Object( 'stealth-startup-lex', 'resources/lex_outline.json' )
     templates.update( json.loads( obj.get()['Body'].read().decode( 'utf8' ) ) )
-
+    
     if memory['verbose']:
         print( '\nConfig ===> ', config )
         print( '\nTemplates ===> ', templates )
@@ -186,7 +202,6 @@ def generateLex( origin, trigger ):
 # AWS Functions
 
 def uploadLexFiles( origin, lex, knowledge_base, delete_instructions ):
-
     # Creates files in 'tmp' directory in Lambda FS
 
     lex_filename = lex[ 'resource' ][ 'name' ] + '_lex'
@@ -287,8 +302,15 @@ def lambda_handler( event, context ):
 
     trigger = event[ 'Records' ][0][ 's3' ][ 'object' ][ 'key' ]
     if memory['verbose']: print( '\nTrigger ===> ', trigger )
+    
+    s3 = boto3.resource( 's3' )
 
-    generated = generateLex( origin, trigger )
+    # Gets Triggering Configuration File
+    obj = s3.Object( origin[ 'name' ], trigger )
+    config.update( yaml.full_load( obj.get()['Body'].read() )['config'] )
+
+    generated = generateLex( config )
+    
     if memory[ 'verbose' ]:
         print( '\nLex ===> ', generated[ 'lex' ] )
         print( '\nKnowledge Base ===> ', generated[ 'knowledge_base' ] )
@@ -297,3 +319,11 @@ def lambda_handler( event, context ):
     uploadLexFiles( origin, generated[ 'lex' ], generated[ 'knowledge_base' ], generated[ 'delete_instructions' ] )
 
     print( '\nLex bot "%s" has been successfully generated.\n'%generated[ 'lex' ][ 'resource' ][ 'name' ] )
+    
+def test():
+    config = None
+    with open('./configs/chatbot_config.yml', 'r') as file: config = yaml.full_load( file )
+    output = generateLex(config['config'])
+    print( output )
+    
+test()
